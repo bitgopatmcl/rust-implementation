@@ -1,4 +1,5 @@
 ---
+
 name: Release
 
 on:
@@ -18,13 +19,86 @@ on:
 # - npm publish
 # - create GitHub release
 
+env:
+  BINARY_NAME: monorepo
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
+  # Room for improvement regarding caching/work-skipping. One example here
+  # https://github.com/ClementTsang/bottom/blob/92ec3599363c710815c286e975bbb6cc748708dd/.github/workflows/ci.yml#L195
+  cargo-build-release:
+    runs-on: ${{ matrix.triple.os }}
+    container: ${{ matrix.triple.container }}
+    strategy:
+      matrix:
+        triple:
+          - {
+              os: "ubuntu-latest",
+              target: "x86_64-unknown-linux-gnu",
+              cross: false,
+            }
+          - {
+              os: "ubuntu-latest",
+              target: "i686-unknown-linux-gnu",
+              cross: true,
+            }
+          - {
+              os: "ubuntu-latest",
+              target: "x86_64-unknown-linux-musl",
+              cross: false,
+            }
+          - {
+              os: "ubuntu-latest",
+              target: "i686-unknown-linux-musl",
+              cross: true,
+            }
+          - {
+              os: "macOS-latest",
+              target: "x86_64-apple-darwin",
+              cross: false,
+            }
+          # aarch64
+          - {
+              os: "ubuntu-latest",
+              target: "aarch64-unknown-linux-gnu",
+              cross: true,
+            }
+          # macOS ARM
+          - {
+              os: "macOS-latest",
+              target: "aarch64-apple-darwin",
+              cross: true,
+            }
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Install toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+        target: ${{ matrix.triple.target }}
+
+    - name: Cargo build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --all-targets --verbose --target=${{ matrix.triple.target }}
+        use-cross: ${{ matrix.triple.cross }}
+
+# RESUME: share the compiled binaries with the release stage
+# I think we need to use artifacts for this, set a short TTL
+
+
+
+
+
   release:
     runs-on: ubuntu-latest
-    env:
-      BINARY_NAME: monorepo
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: 1
     steps:
     - name: Login to DockerHub
       uses: docker/login-action@v1
@@ -35,65 +109,66 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
-    - name: Install macOS cross-compilation dependencies
-      run: |
-        sudo apt update
-        sudo apt install --yes \
-          g++ \
-          gcc \
-          libgmp-dev \
-          libmpc-dev \
-          libmpfr-dev \
-          libssl-dev \
-          libxml2-dev \
-          zlib1g-dev
+      # REFACTOR: use artifacts, compile in parallel
+    # - name: Install macOS cross-compilation dependencies
+    #   run: |
+    #     sudo apt update
+    #     sudo apt install --yes \
+    #       g++ \
+    #       gcc \
+    #       libgmp-dev \
+    #       libmpc-dev \
+    #       libmpfr-dev \
+    #       libssl-dev \
+    #       libxml2-dev \
+    #       zlib1g-dev
 
-    - name: Cache osxcross
-      uses: actions/cache@v2
-      id: cache-osxcross
-      with:
-        path: |
-          ~/osxcross
-        key: ${{ runner.os }}-osxcross-${{ hashFiles('$GITHUB_WORKSPACE/ci/resource-macos-sdk') }}
+    # - name: Cache osxcross
+    #   uses: actions/cache@v2
+    #   id: cache-osxcross
+    #   with:
+    #     path: |
+    #       ~/osxcross
+    #     key: ${{ runner.os }}-osxcross-${{ hashFiles('$GITHUB_WORKSPACE/ci/resource-macos-sdk') }}
 
-    - name: Install osxcross
-      if: steps.cache-osxcross.outputs.cache-hit != 'true'
-      run: |
-        sdk=$(cat $GITHUB_WORKSPACE/ci/resource-macos-sdk)
-        git clone https://github.com/tpoechtrager/osxcross ~/osxcross
-        pushd ~/osxcross
-        curl -O $sdk
-        mv $(basename $sdk) tarballs/
-        UNATTENDED=yes OSX_VERSION_MIN=10.7 ./build.sh
-        popd
+    # - name: Install osxcross
+    #   if: steps.cache-osxcross.outputs.cache-hit != 'true'
+    #   run: |
+    #     sdk=$(cat $GITHUB_WORKSPACE/ci/resource-macos-sdk)
+    #     git clone https://github.com/tpoechtrager/osxcross ~/osxcross
+    #     pushd ~/osxcross
+    #     curl -O $sdk
+    #     mv $(basename $sdk) tarballs/
+    #     UNATTENDED=yes OSX_VERSION_MIN=10.7 ./build.sh
+    #     popd
 
-    - name: Add macOS cross-compilation binaries to path
-      run: echo "$HOME/osxcross/target/bin" >> $GITHUB_PATH
+    # - name: Add macOS cross-compilation binaries to path
+    #   run: echo "$HOME/osxcross/target/bin" >> $GITHUB_PATH
 
-    - name: Install GNU/Linux toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        target: x86_64-unknown-linux-gnu
+    # - name: Install GNU/Linux toolchain
+    #   uses: actions-rs/toolchain@v1
+    #   with:
+    #     profile: minimal
+    #     toolchain: stable
+    #     target: x86_64-unknown-linux-gnu
 
-    - name: Install macOS toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        target: x86_64-apple-darwin
+    # - name: Install macOS toolchain
+    #   uses: actions-rs/toolchain@v1
+    #   with:
+    #     toolchain: stable
+    #     target: x86_64-apple-darwin
 
-    - name: Cache cargo
-      uses: actions/cache@v2
-      id: cache-cargo
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    # - name: Cache cargo
+    #   uses: actions/cache@v2
+    #   id: cache-cargo
+    #   with:
+    #     path: |
+    #       ~/.cargo/bin/
+    #       ~/.cargo/registry/index/
+    #       ~/.cargo/registry/cache/
+    #       ~/.cargo/git/db/
+    #       target/
+    #     key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Install semantic-release-rust
       uses: actions-rs/cargo@v1
